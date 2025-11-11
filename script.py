@@ -428,6 +428,145 @@ def compare_monclub_brevo_lists(monclub_members, brevo_list_id, lists_api):
         print(f"  Error comparing lists: {e}")
         return None
 
+def send_sync_results_email(success=True, error_type=None, error_message=None, sync_summary=None, start_time=None, end_time=None):
+    """Send email notification to admin about sync results using Brevo SMTP API"""
+    try:
+        # Get configuration from environment variables
+        brevo_api_key = os.getenv('BREVO_API_KEY')
+        admin_email = os.getenv('ADMIN_EMAIL')
+        sender_email = os.getenv('BREVO_SENDER_EMAIL')
+        sender_name = os.getenv('BREVO_SENDER_NAME', 'MonClub-Brevo Sync')
+        
+        # Check if email notification is configured
+        if not all([brevo_api_key, admin_email, sender_email]):
+            print("  Warning: Email notification not configured. Missing required environment variables.")
+            print("  Required: BREVO_API_KEY, ADMIN_EMAIL, BREVO_SENDER_EMAIL")
+            return False
+        
+        # Build email content
+        if success:
+            subject = "[MonClub-Brevo Sync] Sync Completed Successfully"
+            
+            # Build success email body
+            body_parts = []
+            body_parts.append("The MonClub to Brevo synchronization has completed successfully.\n")
+            body_parts.append("="*60)
+            
+            if start_time:
+                body_parts.append(f"\nStart Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            if end_time:
+                body_parts.append(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            if start_time and end_time:
+                duration = end_time - start_time
+                body_parts.append(f"Duration: {duration}")
+            
+            if sync_summary:
+                body_parts.append(f"\n\nSync Summary:")
+                body_parts.append(f"  Total lists: {sync_summary.get('total_lists', 'N/A')}")
+                body_parts.append(f"  Successfully synced: {sync_summary.get('synced_count', 'N/A')}")
+                body_parts.append(f"  Failed: {sync_summary.get('failed_count', 'N/A')}")
+            
+            body_parts.append(f"\n" + "="*60)
+            body_parts.append("\nAll lists have been synchronized successfully.")
+            
+            text_content = '\n'.join(body_parts)
+            
+            # HTML version
+            html_content = f"""<html>
+<body>
+<h2>MonClub to Brevo Sync - Success</h2>
+<p>The synchronization has completed successfully.</p>
+<hr>
+<p><strong>Start Time:</strong> {start_time.strftime('%Y-%m-%d %H:%M:%S') if start_time else 'N/A'}</p>
+<p><strong>End Time:</strong> {end_time.strftime('%Y-%m-%d %H:%M:%S') if end_time else 'N/A'}</p>
+<p><strong>Duration:</strong> {end_time - start_time if (start_time and end_time) else 'N/A'}</p>
+{f'<h3>Sync Summary</h3><ul><li>Total lists: {sync_summary.get("total_lists", "N/A")}</li><li>Successfully synced: {sync_summary.get("synced_count", "N/A")}</li><li>Failed: {sync_summary.get("failed_count", "N/A")}</li></ul>' if sync_summary else ''}
+<hr>
+<p>All lists have been synchronized successfully.</p>
+</body>
+</html>"""
+        else:
+            subject = f"[MonClub-Brevo Sync] Sync Failed: {error_type or 'Error'}"
+            
+            # Build error email body
+            body_parts = []
+            body_parts.append("An error occurred during the MonClub to Brevo synchronization.\n")
+            body_parts.append("="*60)
+            body_parts.append(f"\nError Type: {error_type or 'Unknown'}")
+            body_parts.append(f"Error Message: {error_message or 'No details available'}")
+            
+            if start_time:
+                body_parts.append(f"\nStart Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            if end_time:
+                body_parts.append(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            if start_time and end_time:
+                duration = end_time - start_time
+                body_parts.append(f"Duration: {duration}")
+            
+            body_parts.append(f"\n" + "="*60)
+            body_parts.append("\nPlease check the script logs for more details.")
+            
+            text_content = '\n'.join(body_parts)
+            
+            # HTML version
+            html_content = f"""<html>
+<body>
+<h2 style="color: red;">MonClub to Brevo Sync - Error</h2>
+<p>An error occurred during the synchronization process.</p>
+<hr>
+<p><strong>Error Type:</strong> {error_type or 'Unknown'}</p>
+<p><strong>Error Message:</strong> {error_message or 'No details available'}</p>
+<p><strong>Start Time:</strong> {start_time.strftime('%Y-%m-%d %H:%M:%S') if start_time else 'N/A'}</p>
+<p><strong>End Time:</strong> {end_time.strftime('%Y-%m-%d %H:%M:%S') if end_time else 'N/A'}</p>
+<p><strong>Duration:</strong> {end_time - start_time if (start_time and end_time) else 'N/A'}</p>
+<hr>
+<p>Please check the script logs for more details.</p>
+</body>
+</html>"""
+        
+        # Prepare API request
+        api_url = "https://api.brevo.com/v3/smtp/email"
+        headers = {
+            "accept": "application/json",
+            "api-key": brevo_api_key,
+            "content-type": "application/json"
+        }
+        
+        payload = {
+            "sender": {
+                "name": sender_name,
+                "email": sender_email
+            },
+            "to": [
+                {
+                    "email": admin_email
+                }
+            ],
+            "subject": subject,
+            "htmlContent": html_content,
+            "textContent": text_content
+        }
+        
+        # Send email via Brevo API
+        response = requests.post(api_url, json=payload, headers=headers)
+        response.raise_for_status()
+        
+        print(f"  Sync results email sent successfully to {admin_email}")
+        return True
+        
+    except requests.exceptions.RequestException as e:
+        print(f"  Failed to send sync results email: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                print(f"  Error details: {error_details}")
+            except:
+                print(f"  Response: {e.response.text}")
+        return False
+    except Exception as e:
+        print(f"  Error sending sync results email: {e}")
+        return False
+
 # Main execution
 start_time = datetime.now()
 try:
@@ -704,10 +843,25 @@ try:
     print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Duration: {duration}")
     print("="*60)
+    
+    # Send success notification email
+    print("\nSending sync results email...")
+    sync_summary = {
+        'total_lists': len(monclub_lists_data),
+        'synced_count': synced_count,
+        'failed_count': failed_count
+    }
+    send_sync_results_email(
+        success=True,
+        sync_summary=sync_summary,
+        start_time=start_time,
+        end_time=end_time
+    )
 
 except requests.exceptions.RequestException as e:
     end_time = datetime.now()
     duration = end_time - start_time
+    error_message = str(e)
     print(f"\nError with MonClub API: {e}")
     print()
     print("="*60)
@@ -715,9 +869,19 @@ except requests.exceptions.RequestException as e:
     print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Duration: {duration}")
     print("="*60)
+    # Send error notification email
+    print("\nSending sync results email...")
+    send_sync_results_email(
+        success=False,
+        error_type="MonClub API Error",
+        error_message=error_message,
+        start_time=start_time,
+        end_time=end_time
+    )
 except ApiException as e:
     end_time = datetime.now()
     duration = end_time - start_time
+    error_message = str(e)
     print(f"\nException when calling Brevo API: {e}")
     print()
     print("="*60)
@@ -725,9 +889,19 @@ except ApiException as e:
     print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Duration: {duration}")
     print("="*60)
+    # Send error notification email
+    print("\nSending sync results email...")
+    send_sync_results_email(
+        success=False,
+        error_type="Brevo API Error",
+        error_message=error_message,
+        start_time=start_time,
+        end_time=end_time
+    )
 except Exception as e:
     end_time = datetime.now()
     duration = end_time - start_time
+    error_message = str(e)
     print(f"\nUnexpected error: {e}")
     print()
     print("="*60)
@@ -735,5 +909,14 @@ except Exception as e:
     print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Duration: {duration}")
     print("="*60)
+    # Send error notification email
+    print("\nSending sync results email...")
+    send_sync_results_email(
+        success=False,
+        error_type="Unexpected Error",
+        error_message=error_message,
+        start_time=start_time,
+        end_time=end_time
+    )
 
 

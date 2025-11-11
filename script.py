@@ -436,11 +436,17 @@ def send_sync_results_email(success=True, error_type=None, error_message=None, s
         admin_email = os.getenv('ADMIN_EMAIL')
         sender_email = os.getenv('BREVO_SENDER_EMAIL')
         sender_name = os.getenv('BREVO_SENDER_NAME', 'MonClub-Brevo Sync')
+        email_on_error_only = os.getenv('BREVO_EMAIL_ON_ERROR_ONLY', 'false').lower() in ('true', '1', 'yes')
         
         # Check if email notification is configured
         if not all([brevo_api_key, admin_email, sender_email]):
             print("  Warning: Email notification not configured. Missing required environment variables.")
             print("  Required: BREVO_API_KEY, ADMIN_EMAIL, BREVO_SENDER_EMAIL")
+            return False
+        
+        # If configured to only send on errors and this is a success, skip sending
+        if success and email_on_error_only:
+            print("  Email notification skipped (BREVO_EMAIL_ON_ERROR_ONLY is enabled)")
             return False
         
         # Build email content
@@ -844,19 +850,23 @@ try:
     print(f"Duration: {duration}")
     print("="*60)
     
-    # Send success notification email
-    print("\nSending sync results email...")
-    sync_summary = {
-        'total_lists': len(monclub_lists_data),
-        'synced_count': synced_count,
-        'failed_count': failed_count
-    }
-    send_sync_results_email(
-        success=True,
-        sync_summary=sync_summary,
-        start_time=start_time,
-        end_time=end_time
-    )
+    # Send success notification email (if not configured to only send on errors)
+    email_on_error_only = os.getenv('BREVO_EMAIL_ON_ERROR_ONLY', 'false').lower() in ('true', '1', 'yes')
+    if not email_on_error_only:
+        print("\nSending sync results email...")
+        sync_summary = {
+            'total_lists': len(monclub_lists_data),
+            'synced_count': synced_count,
+            'failed_count': failed_count
+        }
+        send_sync_results_email(
+            success=True,
+            sync_summary=sync_summary,
+            start_time=start_time,
+            end_time=end_time
+        )
+    else:
+        print("\nEmail notification skipped (BREVO_EMAIL_ON_ERROR_ONLY is enabled)")
 
 except requests.exceptions.RequestException as e:
     end_time = datetime.now()

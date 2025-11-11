@@ -6,6 +6,7 @@ import brevo_python
 from brevo_python.rest import ApiException
 from pprint import pprint
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -428,7 +429,15 @@ def compare_monclub_brevo_lists(monclub_members, brevo_list_id, lists_api):
         return None
 
 # Main execution
+start_time = datetime.now()
 try:
+    # Print start timestamp
+    print("="*60)
+    print(f"SYNC SCRIPT STARTED")
+    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60)
+    print()
+    
     # Step 1: Authenticate to MonClub API
     print("Authenticating to MonClub API...")
     monclub_token = authenticate_monclub()
@@ -685,12 +694,46 @@ try:
     print(f"  Successfully synced: {synced_count}")
     print(f"  Failed: {failed_count}")
     print(f"{'='*60}")
+    
+    # Print end timestamp
+    end_time = datetime.now()
+    duration = end_time - start_time
+    print()
+    print("="*60)
+    print(f"SYNC SCRIPT COMPLETED")
+    print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Duration: {duration}")
+    print("="*60)
 
 except requests.exceptions.RequestException as e:
-    print(f"Error with MonClub API: {e}")
+    end_time = datetime.now()
+    duration = end_time - start_time
+    print(f"\nError with MonClub API: {e}")
+    print()
+    print("="*60)
+    print(f"SYNC SCRIPT FAILED")
+    print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Duration: {duration}")
+    print("="*60)
 except ApiException as e:
-    print(f"Exception when calling Brevo API: {e}\n")
+    end_time = datetime.now()
+    duration = end_time - start_time
+    print(f"\nException when calling Brevo API: {e}")
+    print()
+    print("="*60)
+    print(f"SYNC SCRIPT FAILED")
+    print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Duration: {duration}")
+    print("="*60)
 except Exception as e:
-    print(f"Unexpected error: {e}")
+    end_time = datetime.now()
+    duration = end_time - start_time
+    print(f"\nUnexpected error: {e}")
+    print()
+    print("="*60)
+    print(f"SYNC SCRIPT FAILED")
+    print(f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Duration: {duration}")
+    print("="*60)
 
 

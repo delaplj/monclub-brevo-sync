@@ -461,23 +461,45 @@ try:
         try:
             members_response = get_monclub_list_members(monclub_token, list_data['_id'])
             # Extract email, firstName, and lastName from each member
+            # Also extract emails from tutors
             extracted_members = []
             if isinstance(members_response, list):
                 for member in members_response:
                     if isinstance(member, dict):
-                        extracted_member = {
-                            "email": member.get("email", ""),
-                            "firstName": member.get("firstName", ""),
-                            "lastName": member.get("lastName", "")
-                        }
-                        # Only add members with email
-                        if extracted_member["email"]:
+                        # Extract member's own email
+                        member_email = member.get("email", "").strip().lower()
+                        if member_email:
+                            extracted_member = {
+                                "email": member_email,
+                                "firstName": member.get("firstName", ""),
+                                "lastName": member.get("lastName", "")
+                            }
                             extracted_members.append(extracted_member)
+                        
+                        # Extract tutor emails
+                        tutors = member.get("tutors", [])
+                        if isinstance(tutors, list):
+                            for tutor in tutors:
+                                if isinstance(tutor, dict):
+                                    tutor_email = tutor.get("email", "").strip().lower()
+                                    if tutor_email:
+                                        # Parse fullName to get firstName and lastName
+                                        full_name = tutor.get("fullName", "").strip()
+                                        name_parts = full_name.split(maxsplit=1) if full_name else []
+                                        tutor_first_name = name_parts[0] if len(name_parts) > 0 else ""
+                                        tutor_last_name = name_parts[1] if len(name_parts) > 1 else ""
+                                        
+                                        extracted_tutor = {
+                                            "email": tutor_email,
+                                            "firstName": tutor_first_name,
+                                            "lastName": tutor_last_name
+                                        }
+                                        extracted_members.append(extracted_tutor)
             
             # Store extracted members in the list_data dictionary
             list_data['members'] = extracted_members
             member_count = len(extracted_members)
-            print(f"  Found {member_count} members with email addresses")
+            print(f"  Found {member_count} contacts with email addresses (members + tutors)")
         except Exception as e:
             print(f"  Error fetching members: {e}")
             list_data['members'] = []

@@ -1,4 +1,5 @@
 from __future__ import print_function
+import argparse
 import time
 import os
 import requests
@@ -6,10 +7,61 @@ import brevo_python
 from brevo_python.rest import ApiException
 from pprint import pprint
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Load environment variables from .env file
 load_dotenv()
+
+# MonClub seasons, keyed by name. Add a new entry each season with the _id
+# MonClub assigned to it (visible in the "seasonId" of the members request
+# made by the MonClub admin UI).
+SEASONS = {
+    "2024/2025": {
+        "_id": "67c994d6317ca7811f946a95",
+        "code": 25,
+        "startDate": "2024-08-31T22:00:00.000Z",
+        "endDate": "2025-08-31T21:59:59.999Z",
+    },
+    "2025/2026": {
+        "_id": "67c994d6317ca7811f946a96",
+        "code": 26,
+        "startDate": "2025-08-31T22:00:00.000Z",
+        "endDate": "2026-08-31T21:59:59.999Z",
+    },
+    "2026/2027": {
+        "_id": "6a0874e14ed708238429244b",
+        "code": 27,
+        "startDate": "2026-08-31T22:00:00.000Z",
+        "endDate": "2027-08-31T21:59:59.999Z",
+    },
+}
+
+def parse_iso(date_str):
+    return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+
+def resolve_season(season_name=None, require_id=True):
+    """Return (name, season) for the given season name, or the season containing today"""
+    if season_name:
+        if season_name not in SEASONS:
+            raise ValueError(f"Unknown season '{season_name}'. Known: {', '.join(SEASONS)}")
+        name = season_name
+    else:
+        now = datetime.now(timezone.utc)
+        name = next((n for n, s in SEASONS.items()
+                     if parse_iso(s["startDate"]) <= now <= parse_iso(s["endDate"])), None)
+        if not name:
+            raise ValueError("No season in SEASONS covers today's date - add the new season")
+    season = SEASONS[name]
+    if require_id and not season["_id"]:
+        raise ValueError(f"Season {name} has no MonClub _id configured")
+    return name, season
+
+parser = argparse.ArgumentParser(description="Sync MonClub lists to Brevo")
+parser.add_argument("--season", help="Season to sync, e.g. 2025/2026 (default: current season). "
+                                     "A past season is synced into archive lists named 'MonClub <list> <season>'.")
+parser.add_argument("--dry-run", action="store_true",
+                    help="Only compare lists; do not create lists, change contacts or send emails")
+args = parser.parse_args()
 
 # MonClub API configuration
 def get_monclub_base_url():
@@ -54,8 +106,8 @@ def get_monclub_lists(token):
     return response.json()
 
 # Get members from a specific list
-def get_monclub_list_members(token, list_id):
-    """Get members from a specific MonClub list using the list _id as section parameter"""
+def get_monclub_list_members(token, list_id, season_id):
+    """Get members from a specific MonClub list for a season, using the list _id as section parameter"""
     base_url = get_monclub_base_url()
     custom_id = os.getenv('MONCLUB_CUSTOM_ID')
     members_url = f"{base_url}/api/customs/members"
@@ -68,7 +120,7 @@ def get_monclub_list_members(token, list_id):
     payload = {
         "customId": custom_id,
         "section": list_id,
-        "seasonId": "67c994d6317ca7811f946a96",
+        "seasonId": season_id,
         "membership": [],
         "search": "",
         "minimumDOB": None,
@@ -84,30 +136,8 @@ def get_monclub_list_members(token, list_id):
         "hidePractitioners": False,
         "membersWithLicense": "",
         "seasons": [
-            {
-                "_id": "67c994d6317ca7811f946a95",
-                "name": "2024/2025",
-                "code": 25,
-                "startDate": "2024-08-31T22:00:00.000Z",
-                "endDate": "2025-08-31T21:59:59.999Z",
-                "customId": custom_id,
-                "deleted": False,
-                "createdAt": "2025-03-06T12:28:07.270Z",
-                "updatedAt": "2025-03-06T12:28:07.270Z",
-                "__v": 0
-            },
-            {
-                "_id": "67c994d6317ca7811f946a96",
-                "name": "2025/2026",
-                "code": 26,
-                "startDate": "2025-08-31T22:00:00.000Z",
-                "endDate": "2026-08-31T21:59:59.999Z",
-                "customId": custom_id,
-                "deleted": False,
-                "createdAt": "2025-03-06T12:28:07.270Z",
-                "updatedAt": "2025-03-06T12:28:07.270Z",
-                "__v": 0
-            }
+            {"name": name, "customId": custom_id, "deleted": False, **season}
+            for name, season in SEASONS.items() if season["_id"]
         ],
         "status": "",
         "questionId": "",
@@ -146,25 +176,38 @@ def get_brevo_folder_id(api_client, folder_name="MonClub"):
         print(f"  Error getting folders: {e}")
         return None
 
-def create_brevo_list(lists_api, list_name, folder_id=None):
-    """Create a list in Brevo and return the list ID, or return existing list ID if it already exists"""
+def create_brevo_list(lists_api, list_name, folder_id=None, dry_run=False):
+    """Create a list in Brevo and return the list ID, or return existing list ID if it already exists.
+    In dry-run mode, returns None when the list would have to be created."""
     try:
-        # First, check if the list already exists
+        # First, check if the list already exists (paginated, 50 is the API maximum)
         print(f"  Checking if list '{list_name}' already exists...")
-        existing_lists = lists_api.get_lists(limit=50, offset=0)
-        
-        # Handle both dict and object responses
-        lists_list = existing_lists.lists if hasattr(existing_lists, 'lists') else existing_lists
-        
-        for lst in lists_list:
-            # Handle both dict and object access
-            lst_name = lst.get('name') if isinstance(lst, dict) else getattr(lst, 'name', None)
-            lst_id = lst.get('id') if isinstance(lst, dict) else getattr(lst, 'id', None)
+        offset = 0
+        while True:
+            existing_lists = lists_api.get_lists(limit=50, offset=offset)
 
-            if lst_name == list_name:
-                print(f"  Found existing list '{list_name}' with ID: {lst_id}")
-                return lst_id
-        
+            # Handle both dict and object responses
+            lists_list = existing_lists.lists if hasattr(existing_lists, 'lists') else existing_lists
+            if not lists_list:
+                break
+
+            for lst in lists_list:
+                # Handle both dict and object access
+                lst_name = lst.get('name') if isinstance(lst, dict) else getattr(lst, 'name', None)
+                lst_id = lst.get('id') if isinstance(lst, dict) else getattr(lst, 'id', None)
+
+                if lst_name == list_name:
+                    print(f"  Found existing list '{list_name}' with ID: {lst_id}")
+                    return lst_id
+
+            if len(lists_list) < 50:
+                break
+            offset += 50
+
+        if dry_run:
+            print(f"  [dry-run] List '{list_name}' not found, would be created")
+            return None
+
         # List doesn't exist, create it
         print(f"  List '{list_name}' not found, creating new list...")
         create_list = brevo_python.CreateList(name=list_name, folder_id=folder_id)
@@ -325,16 +368,11 @@ def remove_contacts_from_brevo_list(lists_api, list_id, contact_emails):
         return False
 
 def add_contacts_to_brevo_list(lists_api, list_id, contact_emails):
-    """Add contacts to a Brevo list by email, skipping those already in the list, batching in chunks of 150"""
+    """Add contacts to a Brevo list by email, batching in chunks of 150.
+    Callers pass only contacts missing from the list (see compare_monclub_brevo_lists)."""
     try:
-        # Filter out contacts that are already in the list
-        contacts_to_add = []
-        for email in contact_emails:
-            if not is_contact_in_list(lists_api, list_id, email):
-                contacts_to_add.append(email)
-            else:
-                print(f"    Skipping {email}: already in list")
-        
+        contacts_to_add = list(contact_emails)
+
         if not contacts_to_add:
             print(f"    All contacts are already in the list")
             return True
@@ -381,8 +419,8 @@ def compare_monclub_brevo_lists(monclub_members, brevo_list_id, lists_api):
         print(f"\nMonClub list:")
         print(f"  Total contacts: {len(monclub_emails)}")
         
-        # Get Brevo list contacts
-        brevo_emails = set(get_all_contacts_from_brevo_list(lists_api, brevo_list_id))
+        # Get Brevo list contacts (a list that doesn't exist yet is empty)
+        brevo_emails = set(get_all_contacts_from_brevo_list(lists_api, brevo_list_id)) if brevo_list_id else set()
         print(f"\nBrevo list:")
         print(f"  Total contacts: {len(brevo_emails)}")
         
@@ -583,6 +621,18 @@ try:
     print("="*60)
     print()
     
+    # Resolve which MonClub season to sync. The current season feeds the
+    # plain "MonClub <list>" lists; a past season feeds archive lists
+    # named "MonClub <list> <season>".
+    current_season_name, _ = resolve_season(require_id=False)
+    season_name, season = resolve_season(args.season)
+    is_archive = season_name != current_season_name
+    list_suffix = f" {season_name}" if is_archive else ""
+    print(f"Season: {season_name} ({'archive' if is_archive else 'current'})")
+    if args.dry_run:
+        print("DRY RUN: no list will be created, no contact changed, no email sent")
+    print()
+    
     # Step 1: Authenticate to MonClub API
     print("Authenticating to MonClub API...")
     monclub_token = authenticate_monclub()
@@ -600,7 +650,7 @@ try:
         if list_item.get("name") and list_item.get("_id") and list_item.get("parentId") is None:
             monclub_lists_data.append({
                 "_id": list_item.get("_id"),
-                "name": f"MonClub {list_item.get('name')}",
+                "name": f"MonClub {list_item.get('name')}{list_suffix}",
                 "original_name": list_item.get("name")
             })
     
@@ -613,7 +663,7 @@ try:
     for list_data in monclub_lists_data:
         print(f"\nGetting members for: {list_data['name']}...")
         try:
-            members_response = get_monclub_list_members(monclub_token, list_data['_id'])
+            members_response = get_monclub_list_members(monclub_token, list_data['_id'], season['_id'])
             # Extract email, firstName, and lastName from each member
             # Also extract emails from tutors
             extracted_members = []
@@ -724,7 +774,7 @@ try:
         try:
             # Create or find the list in Brevo
             print(f"\nCreating/finding list in Brevo: {list_name}...")
-            brevo_list_id = create_brevo_list(lists_api, list_name, folder_id)
+            brevo_list_id = create_brevo_list(lists_api, list_name, folder_id, dry_run=args.dry_run)
             
             # Compare lists before syncing
             comparison_result = compare_monclub_brevo_lists(
@@ -741,6 +791,10 @@ try:
             contacts_to_add = comparison_result.get('to_add', [])
             contacts_to_remove = comparison_result.get('to_remove', [])
             monclub_contact_map = comparison_result.get('monclub_contact_map', {})
+            
+            if args.dry_run:
+                print(f"\n  [dry-run] Would add {len(contacts_to_add)} and remove {len(contacts_to_remove)} contacts")
+                return True
             
             # Step 1: Add new contacts from MonClub
             if contacts_to_add:
@@ -852,7 +906,9 @@ try:
     
     # Send success notification email (if not configured to only send on errors)
     email_on_error_only = os.getenv('BREVO_EMAIL_ON_ERROR_ONLY', 'false').lower() in ('true', '1', 'yes')
-    if not email_on_error_only:
+    if args.dry_run:
+        print("\nEmail notification skipped (dry run)")
+    elif not email_on_error_only:
         print("\nSending sync results email...")
         sync_summary = {
             'total_lists': len(monclub_lists_data),

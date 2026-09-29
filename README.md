@@ -71,6 +71,19 @@ Run the script:
 python script.py
 ```
 
+Options:
+
+- `--dry-run`: only fetch and compare lists; nothing is created, changed or emailed
+- `--season 2025/2026`: sync a past season into archive lists named `MonClub <list> 2025/2026`
+
+Without `--season`, the season covering today's date (from the `SEASONS` table in `script.py`) is synced into the `MonClub <list>` lists.
+
+### New season checklist
+
+1. Add the new season to `SEASONS` in `script.py` with its MonClub `_id`
+2. Archive the previous season: `python script.py --season <previous> --dry-run`, then without `--dry-run`
+3. Switch the main lists: `python script.py --dry-run`, then `python script.py`
+
 ### Example Output
 
 When the script runs successfully, you'll see output like this:
